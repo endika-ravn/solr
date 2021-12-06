@@ -26,7 +26,6 @@ import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
-import org.apache.commons.lang3.mutable.Mutable;
 import org.apache.commons.lang3.tuple.Pair;
 import org.apache.lucene.index.IndexWriter;
 import org.apache.lucene.util.BytesRef;
@@ -480,26 +479,31 @@ public class AtomicUpdateDocumentMerger {
       .filter(SolrInputDocument.class::isInstance)
       .map(SolrInputDocument.class::cast)
       .filter(doc -> doc.containsKey(idField.getName()))
-      .collect(Collectors.toMap(doc -> doc.get(idField.getName()).getValue().toString(), doc -> doc, (u, v) -> u, LinkedHashMap::new));
+      .collect(Collectors.toMap(doc -> readChildIdString(doc), doc -> doc, (u, v) -> u, LinkedHashMap::new));
 
     if(existingField.getValues().size() != originalChildrenById.size()) {
-      throw new SolrException(ErrorCode.INVALID_STATE, "Can't add child document on field: " + existingField.getName() + " since it contains values which are either not SolrInputDocument's or do not have an id property");
+      throw new SolrException(ErrorCode.BAD_REQUEST, "Can't add child document on field: " + existingField.getName() + " since it contains values which are either not SolrInputDocument's or do not have an id property");
     }
     for (SolrInputDocument child : children) {
       if (isAtomicUpdate(child)) {
         //When it is atomic update, update the nested document ONLY if it already exists
-        SolrInputDocument original = originalChildrenById.get(child.get(idField.getName()).getValue().toString());
+        final String childIdString = readChildIdString(child);
+        SolrInputDocument original = originalChildrenById.get(childIdString);
         if (original == null) {
-          throw new SolrException(ErrorCode.FORBIDDEN, "A nested atomic update can only update an existing nested document");
+          throw new SolrException(ErrorCode.BAD_REQUEST, "A nested atomic update can only update an existing nested document");
         }
         SolrInputDocument merged = mergeDocHavingSameId(child, original);
-        originalChildrenById.put(child.get(idField.getName()).getValue().toString(), merged);
+        originalChildrenById.put(childIdString, merged);
       } else {
         //If the child is not atomic, replace any existing nested document with the current one
-        originalChildrenById.put(child.get(idField.getName()).getValue().toString(), (child));
+        originalChildrenById.put(readChildIdString(child), (child));
       }
     }
     toDoc.setField(name, originalChildrenById.values());
+  }
+
+  private String readChildIdString(SolrInputDocument doc) {
+    return doc.get(idField.getName()).getValue().toString();
   }
 
   protected void doAddDistinct(SolrInputDocument toDoc, SolrInputField sif, Object fieldVal) {
